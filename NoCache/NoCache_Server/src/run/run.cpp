@@ -1,0 +1,148 @@
+/**
+ * ################################################
+ * ################## Main Function ###############
+ * ################################################
+ *
+ * Version: 1.0
+ * File: run.cpp
+ * Author: Jie Wang
+ * Description: Main Function
+ * Date: 2016-01-06
+ * Copyright (C) 2016 NAOC-TJUCS
+ **/
+
+
+#include <iostream>
+#include <map>
+#include <list>
+#include "../capacity/capacity.h"
+#include "../dispatcher/dispatcher.h"
+#include "../file/file.h"
+#include "../index/index.h"
+#include "../mapxy/mapxy.h"
+#include "../replacement/replacement.h"
+#include "../request/request.h"
+#include "../response/response.h"
+#include "../socket/socket.h"
+#include "../struct/structs.h"
+#include "../variables/variables.h"
+#include "../track/track.h"
+#include "../utils/stringOper.h"
+
+using namespace std;
+
+
+int CACHE_HIT = 0;
+double TOTAL_QOS = 0;
+
+int main(){
+
+	cout << "==========>>>>> START TO SERVE <<<<<==========\n" << endl;
+
+	//store all the request result
+	list<RequestInfo> resultList;
+
+	//初始化数据库
+	init_db();
+	//连接到数据库
+	if (conn_db(DB_HOST_NAME, DB_USER_NAME, DB_PASSWORD, DB_DB_NAME) == 0) {
+		cout<<"SUCCESS!"<<endl;
+	} else {
+		return -1;								//连接数据库失败，函数退出
+	}
+
+
+	struct sockaddr_in s_in;					//server address structure
+	struct sockaddr_in c_in;					//client address structure
+	int l_fd,c_fd;
+	socklen_t len;
+	char buf[NUM_MAX];							//content buff area
+
+	memset((void *)&s_in, 0, sizeof(s_in));
+
+	s_in.sin_family = AF_INET;					//IPV4 communication domain
+	s_in.sin_addr.s_addr = INADDR_ANY;			//accept any address
+	s_in.sin_port = htons(SERVER_PORT);			//change port to netchar
+
+	l_fd = socket(AF_INET, SOCK_STREAM, 0);		//socket(int domain, int type, int protocol)
+
+	bind(l_fd, (struct sockaddr *)&s_in, sizeof(s_in));
+
+	listen(l_fd, NUM_MAX);						//lisiening start
+
+
+	//Store all indexes
+	map<string, list<IndexInfo> > indexMap;
+
+	//serve
+	double qos = 0.0;
+	string serverIp = SERVER_IP;				//服务器IP
+
+	string path = "";
+	struct timeval start, end;
+
+	while(1){
+		c_fd = accept(l_fd,(struct sockaddr *)&c_in,&len);
+
+		memset(&buf,0,sizeof(buf));
+
+		read(c_fd, buf, NUM_MAX);				//read the message send by client
+
+		string reqStr(buf);
+
+		if(reqStr == "EOF") {
+			break;
+		}
+
+		gettimeofday(&start, NULL);
+
+		RequestInfo request = string2Request(reqStr, PATTERN);
+
+		qos = 0.0;
+		//file name: Full | Sub
+		string subFitsName = "";
+
+		path = HDD_SOURCE_PATH;
+
+		subFitsName = request.fileName + ".fits";
+
+
+		int x0=0, y0=0; 						//sub fits (0, 0)
+
+		//response to user
+		response(subFitsName, request.startx, request.starty,
+					request.endx, request.endy, x0, y0, path);
+
+		gettimeofday(&end, NULL);				//start to serve
+		long timeuse = end.tv_sec*1000 + end.tv_usec/1000;
+		request.endTime = timeuse;
+
+		//服务时间
+		qos = (end.tv_sec-start.tv_sec)*1000 + (end.tv_usec-start.tv_usec)/1000;
+
+		request.qos = qos;
+
+		//store result to new list
+		resultList.push_back(request);
+
+		TOTAL_QOS += qos;
+
+		close(c_fd);
+	}
+
+
+	cout<<"HitTimes:"<<CACHE_HIT<<"    HITRATE:"<<((double)CACHE_HIT/(double)resultList.size())<<endl;
+	cout<<"TOTAL_QOS:"<<TOTAL_QOS<<"    AVGRAGE_QOS:"<<(TOTAL_QOS/(double)resultList.size())<<endl;
+
+	stringstream hitRate;
+	hitRate<<"RequestSize,HitTimes,HitRate,TotalQos,AvgrageQos\n"<<resultList.size()<<","
+				<<CACHE_HIT<<","<<((double)CACHE_HIT/(double)resultList.size())<<","
+				<<TOTAL_QOS<<","<<(TOTAL_QOS/(double)resultList.size())<<"\n";
+
+	//record hitRate
+	recordRate(hitRate.str());
+
+	//Record resultList
+	record(resultList);
+
+}
